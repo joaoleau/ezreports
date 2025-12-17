@@ -1,0 +1,41 @@
+services:
+  renderer:
+    image: grafana/grafana-image-renderer:latest
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana-enterprise:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+    environment:
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./data/prometheus:/prometheus
+    networks:
+      - observability
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    restart: always
+    ports:
+      - 1025:1025
+      - 8025:8025
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge

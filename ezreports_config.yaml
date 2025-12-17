@@ -1,0 +1,139 @@
+global:
+  smtp_config:
+    smtp_host: localhost
+    smtp_port: 1025
+    smtp_from: ezreports@email.com
+    smtp_username: ""
+    smtp_password: ""
+
+receivers:
+  - name: devops-receiver
+    email_configs: 
+      subject: "[REPORT] Relatório Mensal de Infra"
+      to:
+        - "devops@email.com"
+        - "devops2@email.com"
+      html_body: |
+        <h2>Relatório Gerado</h2>
+        <p>Segue em anexo o relatório solicitado.</p>
+
+reports:
+  - title: Report Mensal Infra
+    receiver: devops-receiver
+    format: "pdf"
+    panels:
+      - title: Dashboard de monitoramento - Host
+        dashboard_id: Kdh0OoSGz/windows-exporter
+        params:
+          - orgId=1
+          - from=now-5m
+          - to=now
+          - timezone=browser
+          - var-job=windows-exporter
+          - var-hostname=$__all
+          - var-instance=host.docker.internal:9182
+          - var-show_hostname=LEAL
+          - kiosk=1
+          - theme=light
+          - width=1920
+          - height=2000
+
+    template: |
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>{{ .Title }}</title>
+
+        <style>
+          * {
+            box-sizing: border-box;
+            font-family: Arial, Helvetica, sans-serif;
+          }
+
+          body {
+            margin: 0;
+            padding: 32px;
+            background: #ffffff;
+            color: #222;
+          }
+
+          h1 {
+            font-size: 24px;
+            margin-bottom: 4px;
+          }
+
+          .subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 24px;
+          }
+
+          .panel {
+            margin-bottom: 32px;
+            page-break-inside: avoid;
+          }
+
+          .panel-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 8px;
+          }
+          
+          .panel-description {
+            white-space: pre-line;
+            margin-bottom: 8px;
+            color: #555;
+            font-size: 14px;
+          }
+
+          .panel img {
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+          }
+
+          footer {
+            position: fixed;
+            bottom: 16px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+          }
+        </style>
+      </head>
+
+      <body>
+
+        <!-- Header -->
+        <header>
+          <h1>{{ .Title }}</h1>
+          {{ if .Receiver }}
+            <div class="subtitle">Destinatário: {{ .Receiver }}</div>
+          {{ end }}
+        </header>
+
+        <!-- Panels -->
+        {{ range .PanelsData }}
+        <section class="panel">
+          <div class="panel-title">{{ .Title }}</div>
+
+          {{ if .Description }}
+            <div class="panel-description">
+              {{ .Description }}
+            </div>
+          {{ end }}
+
+          <img src="{{ .Path }}" alt="{{ .Title }}" />
+        </section>
+        {{ end }}
+
+        <!-- Footer -->
+        <footer>
+          Gerado em {{ now }}
+        </footer>
+
+      </body>
+      </html>
