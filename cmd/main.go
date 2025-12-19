@@ -66,7 +66,7 @@ func run() int {
 				SMTPConfig: cfg.Global.SMTPConfig,
 			}
 
-			smtpSvc.SendMail(
+			smtpSvc.SendSimpleEmail(
 				rc.EmailConfigs.To,
 				rc.EmailConfigs.Subject,
 				rc.EmailConfigs.HTMLBody,

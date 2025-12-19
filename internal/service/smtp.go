@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
+	"crypto/tls"
 	"github.com/joaoleau/ezreports/internal/config"
 )
 
@@ -16,35 +16,109 @@ type SMTPService struct {
 	SMTPConfig config.SMTPConfig
 }
 
-func (s *SMTPService) SendMail(
-	to []string,
-	subject string,
-	htmlBody string,
-	attachments []string,
-) error {
+func (s *SMTPService) writeAttachment(buf *bytes.Buffer, boundary, filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
 
-	var buf bytes.Buffer
-	boundary := "PROMGO_BOUNDARY"
+	fileName := filepath.Base(filePath)
 
-	buf.WriteString(fmt.Sprintf("From: %s\r\n", s.SMTPConfig.From))
-	buf.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ",")))
-	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
-	buf.WriteString("MIME-Version: 1.0\r\n")
-	buf.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%s\r\n", boundary))
+	var contentType string
+	switch {
+	case strings.HasSuffix(fileName, ".png"):
+		contentType = "image/png"
+	case strings.HasSuffix(fileName, ".pdf"):
+		contentType = "application/pdf"
+	default:
+		return fmt.Errorf("tipo nao suportado: %s", fileName)
+	}
+
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
+	base64.StdEncoding.Encode(encoded, data)
+
+	buf.WriteString(fmt.Sprintf("\r\n--%s\r\n", boundary))
+	buf.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", contentType, fileName))
+	buf.WriteString("Content-Transfer-Encoding: base64\r\n")
+	buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n\r\n", fileName))
+
+	buf.Write(encoded)
 	buf.WriteString("\r\n")
 
-	buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n\r\n")
-	buf.WriteString(htmlBody + "\r\n")
+	return nil
+}
 
-	for _, file := range attachments {
-		if err := s.attachFile(&buf, boundary, file); err != nil {
+func (s *SMTPService) buildMessage(from string, to []string, subject string, filenames []string, text string) []byte {
+	var buffer bytes.Buffer
+
+	boundary := "EZREPORT_BOUNDARY"
+
+	buffer.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	buffer.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ",")))
+	buffer.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	buffer.WriteString("MIME-Version: 1.0\r\n")
+	buffer.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%s\r\n\r\n", boundary))
+
+	// Corpo do email
+	buffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	buffer.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
+	buffer.WriteString(text + "\r\n")
+
+	// Anexos
+	for _, file := range filenames {
+		_ = s.writeAttachment(&buffer, boundary, file)
+	}
+
+	buffer.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
+	return buffer.Bytes()
+}
+
+func (s *SMTPService) sendMailTLS(addr string, auth smtp.Auth, from string, to []string, msg []byte, host string) error {
+	tlsConfig := &tls.Config{
+		ServerName: host,
+	}
+
+	conn, err := tls.Dial("tcp", addr, tlsConfig)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer client.Quit()
+
+	if err = client.Auth(auth); err != nil {
+		return err
+	}
+
+	if err = client.Mail(from); err != nil {
+		return err
+	}
+
+	for _, addr := range to {
+		if err = client.Rcpt(addr); err != nil {
 			return err
 		}
 	}
 
-	buf.WriteString(fmt.Sprintf("--%s--", boundary))
+	w, err := client.Data()
+	if err != nil {
+		return err
+	}
 
+	_, err = w.Write(msg)
+	if err != nil {
+		return err
+	}
+
+	return w.Close()
+}
+
+func (s *SMTPService) SendSimpleEmail(to []string, subject string, body string,	attachments []string,) error {
 	auth := smtp.PlainAuth(
 		"",
 		s.SMTPConfig.Username,
@@ -53,43 +127,13 @@ func (s *SMTPService) SendMail(
 	)
 
 	addr := fmt.Sprintf("%s:%d", s.SMTPConfig.Host, s.SMTPConfig.Port)
-	return smtp.SendMail(addr, auth, s.SMTPConfig.From, to, buf.Bytes())
-}
+	
+	msg := s.buildMessage(s.SMTPConfig.From, to, subject, attachments, body)
 
-func (s *SMTPService) attachFile(
-	buf *bytes.Buffer,
-	boundary string,
-	filePath string,
-) error {
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return err
+	// Porta 465 (SMTPS) SES
+	if s.SMTPConfig.Port == 465 {
+		return s.sendMailTLS(addr, auth, s.SMTPConfig.From, to, msg, s.SMTPConfig.Host)
 	}
 
-	filename := filepath.Base(filePath)
-	mimeType := "application/octet-stream"
-
-	if strings.HasSuffix(filename, ".pdf") {
-		mimeType = "application/pdf"
-	}
-	if strings.HasSuffix(filename, ".png") {
-		mimeType = "image/png"
-	}
-
-	buf.WriteString(fmt.Sprintf("\r\n--%s\r\n", boundary))
-	buf.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", mimeType, filename))
-	buf.WriteString("Content-Transfer-Encoding: base64\r\n")
-	buf.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n\r\n", filename))
-
-	encoded := base64.StdEncoding.EncodeToString(data)
-	for i := 0; i < len(encoded); i += 76 {
-		end := i + 76
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		buf.WriteString(encoded[i:end] + "\r\n")
-	}
-
-	return nil
+	return smtp.SendMail(addr, auth, s.SMTPConfig.From, to, msg)
 }
